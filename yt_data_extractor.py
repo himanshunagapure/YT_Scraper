@@ -589,20 +589,36 @@ class AdvancedYouTubeExtractor:
             })
             
         elif page_type == 'video':
+            # Get full description
+            description = self._get_best_value(api_data.get('description'), script_data.get('description'))
+
+            # Extract social media handles from description
+            social_media_handles = self._extract_social_media_handles(description) if description else {}
+
             final_data.update({
                 'title': self._get_best_value(api_data.get('title'), script_data.get('title'), meta_data.get('title')),
                 'channel_name': self._get_best_value(api_data.get('channel_name'), script_data.get('channel_name')),
                 'upload_date': self._get_best_value(api_data.get('upload_date'), script_data.get('upload_date')),
-                'description': self._get_best_value(api_data.get('description'), script_data.get('description')),
+                'description': description,
+                'social_media_handles': social_media_handles,
+                'email': [handle['username'] for handle in social_media_handles.get('email', [])],
                 'subscribers': self._get_best_value(api_data.get('subscribers'), script_data.get('subscribers')),
                 'views': self._format_number(self._get_best_value(api_data.get('views'), script_data.get('views'))),
                 'channel_url': self._get_best_value(api_data.get('channel_url'), script_data.get('channel_url'))
             })
             
         elif page_type == 'channel':
+            # Get full description
+            description = self._get_best_value(meta_data.get('og:description'))
+
+            # Extract social media handles from description
+            social_media_handles = self._extract_social_media_handles(description) if description else {}
+
             final_data.update({
                 'channel_name': self._get_best_value(meta_data.get('og:title'), meta_data.get('twitter:title')),
-                'description': self._get_best_value(meta_data.get('og:description')),
+                'description': description,
+                'social_media_handles': social_media_handles,
+                'email': [handle['username'] for handle in social_media_handles.get('email', [])],    
                 'subscribers': self._get_best_value(api_data.get('subscribers'), script_data.get('subscribers')),
                 'videos': self._get_video_count(extracted_data)
             })
@@ -612,6 +628,107 @@ class AdvancedYouTubeExtractor:
         
         return final_data
     
+    def _extract_social_media_handles(self, text: str) -> Dict[str, List[str]]:
+        """Extract social media handles from text"""
+        if not text:
+            return {}
+        
+        social_media_handles = {}
+        
+        # Updated social media patterns to capture both URL and username
+        patterns = {
+            'instagram': [
+                r'instagram\.com/([a-zA-Z0-9_.]+)/?',
+                r'ig\.com/([a-zA-Z0-9_.]+)/?',
+                r'instagr\.am/([a-zA-Z0-9_.]+)/?'
+            ],
+            'twitter': [
+                r'twitter\.com/([a-zA-Z0-9_]+)/?',
+                r'x\.com/([a-zA-Z0-9_]+)/?'
+            ],
+            'tiktok': [
+                r'tiktok\.com/@([a-zA-Z0-9_.]+)/?',
+                r'tiktok\.com/([a-zA-Z0-9_.]+)/?'
+            ],
+            'facebook': [
+                r'facebook\.com/([a-zA-Z0-9_.]+)/?',
+                r'fb\.com/([a-zA-Z0-9_.]+)/?',
+                r'fb\.me/([a-zA-Z0-9_.]+)/?'
+            ],
+            'linkedin': [
+                r'linkedin\.com/in/([a-zA-Z0-9_.-]+)/?',
+                r'linkedin\.com/company/([a-zA-Z0-9_.-]+)/?'
+            ],
+            'snapchat': [
+                r'snapchat\.com/add/([a-zA-Z0-9_.]+)/?',
+                r'snapchat\.com/([a-zA-Z0-9_.]+)/?'
+            ],
+            'discord': [
+                r'discord\.gg/([a-zA-Z0-9_.]+)/?',
+                r'discord\.com/invite/([a-zA-Z0-9_.]+)/?'
+            ],
+            'twitch': [
+                r'twitch\.tv/([a-zA-Z0-9_.]+)/?'
+            ],
+            'email': [
+                r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+            ]
+        }
+        
+        # Remove the invalid domains filter - it was blocking legitimate handles
+        
+        for platform, platform_patterns in patterns.items():
+            found_handles = []  # Use list to maintain order and store objects
+            
+            for pattern in platform_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    # Clean up the handle
+                    clean_handle = match.strip()
+                    
+                    # For email, keep the full email
+                    if platform == 'email':
+                        if len(clean_handle) > 5 and '@' in clean_handle:
+                            found_handles.append({
+                                'username': clean_handle,
+                                'url': f"mailto:{clean_handle}"
+                            })
+                    else:
+                        # For social media, store both username and full URL
+                        if len(clean_handle) > 1 and not clean_handle.isdigit():
+                            # Reconstruct the full URL
+                            if platform == 'instagram':
+                                full_url = f"https://www.instagram.com/{clean_handle}/"
+                            elif platform == 'twitter':
+                                full_url = f"https://twitter.com/{clean_handle}"
+                            elif platform == 'facebook':
+                                full_url = f"https://www.facebook.com/{clean_handle}"
+                            elif platform == 'tiktok':
+                                clean_handle = clean_handle.lstrip('@')  # Remove @ if present
+                                full_url = f"https://www.tiktok.com/@{clean_handle}"
+                            elif platform == 'twitch':
+                                full_url = f"https://www.twitch.tv/{clean_handle}"
+                            elif platform == 'linkedin':
+                                full_url = f"https://www.linkedin.com/in/{clean_handle}"
+                            elif platform == 'snapchat':
+                                full_url = f"https://www.snapchat.com/add/{clean_handle}"
+                            elif platform == 'discord':
+                                full_url = f"https://discord.gg/{clean_handle}"
+                            else:
+                                full_url = clean_handle
+                            
+                            # Check for duplicates
+                            if not any(h['username'].lower() == clean_handle.lower() for h in found_handles):
+                                found_handles.append({
+                                    'username': clean_handle,
+                                    'url': full_url
+                                })
+            
+            if found_handles:
+                social_media_handles[platform] = found_handles
+        
+        return social_media_handles
+        
     def _get_best_value(self, *values):
         """Get the best non-None, non-empty value from multiple sources"""
         for value in values:
@@ -761,7 +878,9 @@ class AdvancedYouTubeExtractor:
                     "upload_date": final_data.get('upload_date'),
                     "views": final_data.get('views'),
                     "subscribers": final_data.get('subscribers'),
-                    "description": final_data.get('description', '')[:500] if final_data.get('description') else None  # Limit description
+                    "social_media_handles": final_data.get('social_media_handles', {}),
+                    "email": [handle['username'] for handle in final_data.get('social_media_handles', {}).get('email', [])], 
+                    "description": final_data.get('description', '') if final_data.get('description') else None  # Limit description
                 }
                 # Remove None values
                 video_entry = {k: v for k, v in video_entry.items() if v is not None}
@@ -774,8 +893,7 @@ class AdvancedYouTubeExtractor:
                     "title": final_data.get('title'),
                     "channel_name": final_data.get('channel_name'),
                     "upload_date": final_data.get('upload_date'),
-                    "views": final_data.get('views'),
-                    "description": final_data.get('description', '')[:500] if final_data.get('description') else None
+                    "views": final_data.get('views')
                 }
                 # Remove None values
                 shorts_entry = {k: v for k, v in shorts_entry.items() if v is not None}
@@ -787,7 +905,9 @@ class AdvancedYouTubeExtractor:
                     "content_type": "channel",
                     "channel_name": final_data.get('channel_name'),
                     "subscribers": final_data.get('subscribers'),
-                    "description": final_data.get('description', '')[:500] if final_data.get('description') else None,
+                    "description": final_data.get('description', '') if final_data.get('description') else None,
+                    "social_media_handles": final_data.get('social_media_handles', {}),
+                    "email": [handle['username'] for handle in final_data.get('social_media_handles', {}).get('email', [])], 
                     "videos": final_data.get('videos')
                 }
                 # Remove None values
